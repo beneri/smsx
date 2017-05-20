@@ -44,6 +44,7 @@ import java.util.List;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -127,11 +128,11 @@ public class MainActivity extends AppCompatActivity {
 
 
         // Encryption
-        byte[] encryptedIVAndText = {};
+        byte[] HmacIVEnc = {};
         boolean successfulEncryption = false;
         try {
 
-            encryptedIVAndText = encrypt( allSMS.toString(), password );
+            HmacIVEnc = encrypt( allSMS.toString(), password );
 
             successfulEncryption = true;
 
@@ -144,7 +145,7 @@ public class MainActivity extends AppCompatActivity {
         // Share the data!
         Log.d("SHARE", "Sucessful enc:" + successfulEncryption );
         if( successfulEncryption   ) {
-            String fileData =  Base64.encodeToString( encryptedIVAndText, Base64.DEFAULT );
+            String fileData =  Base64.encodeToString( HmacIVEnc, Base64.DEFAULT );
 
 
             try {
@@ -184,7 +185,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Based on Itaratos code: https://gist.github.com/itarato/abef95871756970a9dad
-    // Added salt and increased key length to 256 bit.
+    // Added salt, increased key length to 256 bit and added HMAC
     public static byte[] encrypt(String plainText, String key) throws Exception {
         byte[] clean = plainText.getBytes();
 
@@ -198,15 +199,13 @@ public class MainActivity extends AppCompatActivity {
         byte[] iv = new byte[ivSize];
         SecureRandom random = new SecureRandom();
         random.nextBytes(iv);
-        //Log.d("IV", Arrays.toString( iv ) );
         IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
 
         // Hashing key.
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        digest.update( (key + salt).getBytes("UTF-8"));
-        byte[] keyBytes = new byte[32]; // Changed to 32 bytes (256 bit)
+        digest.update( (key + salt).getBytes("UTF-8") );
+        byte[] keyBytes = new byte[32];
         System.arraycopy(digest.digest(), 0, keyBytes, 0, keyBytes.length);
-        //Log.d("KEY", Arrays.toString( keyBytes ) );
         SecretKeySpec secretKeySpec = new SecretKeySpec(keyBytes, "AES");
 
         // Encrypt.
@@ -216,12 +215,30 @@ public class MainActivity extends AppCompatActivity {
 
         // Combine IV and encrypted part.
         byte[] encryptedIVAndText = new byte[ivSize + encrypted.length];
-        System.arraycopy(iv, 0, encryptedIVAndText, 0, ivSize);
+        System.arraycopy(iv,        0, encryptedIVAndText, 0,      ivSize);
         System.arraycopy(encrypted, 0, encryptedIVAndText, ivSize, encrypted.length);
 
-        //Log.d("ENC", "\n" + Base64.encodeToString( encryptedIVAndText, Base64.DEFAULT ) );
-        //Log.d("ENC", "\n" + Arrays.toString( encryptedIVAndText ) );
-        return encryptedIVAndText;
+        // Hash the AES key to get a new key.
+        MessageDigest signDigest = MessageDigest.getInstance("SHA-256");
+        signDigest.update( keyBytes );
+        byte[] signKeyBytes = new byte[32];
+        System.arraycopy(signDigest.digest(), 0, signKeyBytes, 0, signKeyBytes.length);
+
+        // HMAC(IV+Encrypted)
+        SecretKeySpec signingKey = new SecretKeySpec(signKeyBytes, "HmacSHA256");
+        Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
+        sha256_HMAC.init(signingKey);
+        byte[] auth = new byte[32];
+        System.arraycopy(sha256_HMAC.doFinal( encryptedIVAndText ), 0, auth, 0, auth.length);
+
+        // Put it all together
+        byte[] HmacIVEnc = new byte[encryptedIVAndText.length + auth.length];
+        System.arraycopy(auth,               0, HmacIVEnc, 0,           auth.length);
+        System.arraycopy(encryptedIVAndText, 0, HmacIVEnc, auth.length, encryptedIVAndText.length);
+
+        //Log.d("noHMAC", "\n" + Base64.encodeToString( encryptedIVAndText, Base64.DEFAULT ) );
+        //Log.d("HMAC", "\n" + Base64.encodeToString( HMACencryptedIVAndText, Base64.DEFAULT )  );
+        return HmacIVEnc;
     }
 
 
